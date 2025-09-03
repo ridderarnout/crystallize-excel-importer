@@ -244,15 +244,6 @@ class CrystallizePIMGraphQLService
             }
         }
 
-        Log::debug("ensureModellijnFolder called", [
-            'modellijnName' => $modellijnName,
-            'merkPath' => $merkPath,
-            'merkPath_type' => gettype($merkPath),
-            'merkPath_length' => strlen($merkPath),
-            'starts_with_slash' => str_starts_with($merkPath, '/'),
-            'contains_published' => str_contains($merkPath, '-published')
-        ]);
-
         $folder = $discoveryService->findFolderByNameAndShape(
             $modellijnName,
             'modellijn',
