@@ -66,33 +66,33 @@ class CrystallizeDiscoveryService
     }
 
     /**
-     * Find a folder by name and shape using discovery search
+     * Find a folder by name and shape, optionally scoped under a parent path
      */
-    public function findFolderByNameAndShape(string $folderName, string $shape): ?array
+    public function findFolderByNameAndShape(string $folderName, string $shape, string $parentPath = null): ?array
     {
-        $cacheKey = "discovery_search:{$shape}:{$folderName}";
+        $cacheKey = "discovery_search:{$shape}:{$folderName}:{$parentPath}";
 
         if (isset($this->pathCache[$cacheKey])) {
             return $this->pathCache[$cacheKey];
         }
 
         $query = '
-            query DiscoverySearchFolder($name: String!, $shape: String!) {
-                search(
-                    language: nl
-                    term: ""
-                    pagination: {limit: 1}
-                    filters: {name: {equals: $name}, shape: {equals: $shape}}
-                ) {
-                    hits {
-                        id
-                        name
-                        shape
-                        path
-                    }
+        query DiscoverySearchFolder($name: String!, $shape: String!) {
+            search(
+                language: nl
+                term: ""
+                pagination: {limit: 20} # fetch more to allow filtering in PHP
+                filters: {name: {equals: $name}, shape: {equals: $shape}}
+            ) {
+                hits {
+                    id
+                    name
+                    shape
+                    path
                 }
             }
-        ';
+        }
+    ';
 
         try {
             $result = $this->graphqlRequest($query, [
@@ -100,7 +100,16 @@ class CrystallizeDiscoveryService
                 'shape' => $shape
             ]);
 
-            $folder = $result['search']['hits'][0] ?? null;
+            $folders = $result['search']['hits'] ?? [];
+
+            // If parentPath is provided, filter by it
+            if ($parentPath) {
+                $folders = array_filter($folders, function ($folder) use ($parentPath) {
+                    return str_starts_with($folder['path'], $parentPath);
+                });
+            }
+
+            $folder = reset($folders) ?: null;
 
             if ($folder) {
                 // Clean the ID by removing "-nl-published" suffix
@@ -152,10 +161,6 @@ class CrystallizeDiscoveryService
 
             $folder = $result['search']['hits'][0] ?? null;
             $path = $folder['path'] ?? null;
-
-            if ($path) {
-                Log::info("Got folder path via Discovery API: {$folderId} -> {$path}");
-            }
 
             $this->pathCache[$cacheKey] = $path;
             return $path;

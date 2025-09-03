@@ -171,12 +171,18 @@ class CrystallizePIMGraphQLService
      */
     public function ensureMerkFolder(string $merkName): ?string
     {
-        // Use Discovery API to find existing folder
         $discoveryService = app(\App\Services\CrystallizeDiscoveryService::class);
         $folder = $discoveryService->findFolderByNameAndShape($merkName, 'merk');
 
         if ($folder && isset($folder['path'])) {
             Log::info("Found existing Merk folder via Discovery: {$merkName} at {$folder['path']}");
+
+            // 🛡️ Safety: Always return path, never ID
+            if (!str_starts_with($folder['path'], '/')) {
+                Log::warning("Discovery returned invalid path for Merk {$merkName}, falling back to expected slug");
+                return '/' . $this->generateSlug($merkName);
+            }
+
             return $folder['path'];
         }
 
@@ -194,16 +200,22 @@ class CrystallizePIMGraphQLService
             sleep(1);
             $newFolder = $discoveryService->findFolderByNameAndShape($merkName, 'merk');
 
-            // ADD DEBUG LOGGING HERE TOO
+            // 🛡️ Safety: Always return path if available, otherwise fallback
+            $safePath = $newFolder['path'] ?? $expectedPath;
+
+            if (!str_starts_with($safePath, '/')) {
+                Log::warning("Discovery returned invalid path for new Merk {$merkName}, using expected slug");
+                $safePath = $expectedPath;
+            }
+
             Log::debug("ensureMerkFolder returning new path", [
                 'merkName' => $merkName,
-                'returning' =>  $newFolder['path'] ?? $expectedPath,
+                'returning' => $safePath,
                 'newFolder_id' => $newFolder['id'] ?? 'no_id',
                 'createdFolder_id' => $createdFolder['id']
             ]);
 
-            // Return Discovery path if available, otherwise use expected path
-            return $newFolder['path'] ?? $expectedPath;
+            return $safePath;
         }
 
         return null;
@@ -214,6 +226,23 @@ class CrystallizePIMGraphQLService
      */
     public function ensureModellijnFolder(string $modellijnName, string $merkPath): ?string
     {
+        $discoveryService = app(\App\Services\CrystallizeDiscoveryService::class);
+
+        // 🛡️ SAFETY CHECK: If merkPath looks like an ID instead of a path, resolve it
+        if (!str_starts_with($merkPath, '/')) {
+            Log::warning("ensureModellijnFolder received merkPath as ID instead of path", [
+                'given' => $merkPath
+            ]);
+
+            $resolvedPath = $discoveryService->getFolderPath($merkPath);
+            if ($resolvedPath) {
+                Log::info("Resolved merkPath ID {$merkPath} to path {$resolvedPath}");
+                $merkPath = $resolvedPath;
+            } else {
+                Log::error("Failed to resolve merkPath ID to path", ['merkPath' => $merkPath]);
+                return null;
+            }
+        }
 
         Log::debug("ensureModellijnFolder called", [
             'modellijnName' => $modellijnName,
@@ -224,17 +253,18 @@ class CrystallizePIMGraphQLService
             'contains_published' => str_contains($merkPath, '-published')
         ]);
 
-        // Use Discovery API to find existing folder
-        $discoveryService = app(\App\Services\CrystallizeDiscoveryService::class);
-        $folder = $discoveryService->findFolderByNameAndShape($modellijnName, 'modellijn');
+        $folder = $discoveryService->findFolderByNameAndShape(
+            $modellijnName,
+            'modellijn',
+            $merkPath // <-- scope to correct merk
+        );
 
-        if ($folder && isset($folder['path']) && str_starts_with($folder['path'], $merkPath)) {
+        if ($folder && isset($folder['path'])) {
             Log::info("Found existing Modellijn folder via Discovery: {$modellijnName} at {$folder['path']}");
             return $folder['path'];
         }
 
         // Create new Modellijn folder using PIM API
-        // IMPORTANT: Use the merkPath (not the ID) as the parent path
         Log::info("Creating Modellijn folder via PIM: {$modellijnName} under {$merkPath}");
         $createdFolder = $this->createFolder($modellijnName, $merkPath, 'modellijn');
 
@@ -246,7 +276,11 @@ class CrystallizePIMGraphQLService
 
             // Optional: Verify with Discovery API after a short delay
             sleep(1);
-            $newFolder = $discoveryService->findFolderByNameAndShape($modellijnName, 'modellijn');
+            $newFolder = $discoveryService->findFolderByNameAndShape(
+                $modellijnName,
+                'modellijn',
+                $merkPath
+            );
 
             // Return Discovery path if available, otherwise use expected path
             return $newFolder['path'] ?? $expectedPath;
@@ -258,16 +292,22 @@ class CrystallizePIMGraphQLService
     /**
      * Create a Sub-modellijn folder (uses Discovery to check, PIM to create)
      */
+    /**
+     * Create a Sub-modellijn folder (uses Discovery to check, PIM to create)
+     */
     public function createSubModellijn(string $subModellijnName, string $modellijnPath): ?string
     {
         Log::info("Creating Sub-modellijn via PIM: {$subModellijnName} under {$modellijnPath}");
 
-        // Check if it already exists using Discovery API
+        // Check if it already exists using Discovery API (scoped by parent path)
         $discoveryService = app(\App\Services\CrystallizeDiscoveryService::class);
-        $existingFolder = $discoveryService->findFolderByNameAndShape($subModellijnName, 'sub-modellijn');
+        $existingFolder = $discoveryService->findFolderByNameAndShape(
+            $subModellijnName,
+            'sub-modellijn',
+            $modellijnPath
+        );
 
-        if ($existingFolder && isset($existingFolder['path']) && str_starts_with($existingFolder['path'], $modellijnPath)) {
-            Log::info("Sub-modellijn {$subModellijnName} already exists at {$existingFolder['path']}");
+        if ($existingFolder && isset($existingFolder['path'])) {
             return $existingFolder['path'];
         }
 
@@ -283,7 +323,6 @@ class CrystallizePIMGraphQLService
         Log::error("Failed to create sub-modellijn folder: {$subModellijnName}");
         return null;
     }
-
     /**
      * Generate a URL-friendly slug from a string
      */
